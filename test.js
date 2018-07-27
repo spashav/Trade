@@ -1,6 +1,6 @@
 const getRandomInt = (min, max) => {
-		if (min == max) return min;
-		return Math.floor(Math.random() * (max - min + 1)) + min;
+	if (min == max) return min;
+	return Math.floor(Math.random() * (max - min + 1)) + min;
 };
 
 const getSample = (array) => array[getRandomInt(0, array.length -1)];
@@ -28,7 +28,7 @@ class Game {
 		}
 		return possibleOffers;
 	}
-	
+
 	getPossibleValues(totalVal = this.value, values = []) {
 		const counts = this.counts;
 		let possibleValues = [];
@@ -47,7 +47,7 @@ class Game {
 		}
 		return possibleValues;
 	}
-	
+
 	setPlayers(p1,p2, t) {
 		this.p1 = t == 1 ? new Player(true, this, p1) : new Player(true, this, p1);
 		this.p2 = t == 1 ? new Player(false, this, p2) : new Player(false, this, p2);
@@ -89,8 +89,8 @@ class Game {
 }
 
 const generatePlayer = (game) => {
-	const possibleValues = game.possibleValues;
-	return getSample(possibleValues);
+const possibleValues = game.possibleValues;
+return getSample(possibleValues);
 };
 
 const getTotalValue = (offer, values) => offer.reduce((mem,c,i) => mem + c * values[i], 0);
@@ -113,32 +113,62 @@ class Player {
 		this.wFeatures = opt.wFeatures;
 	}
 
-	calcP_opp(o, p_opp, p_own, me, turn) { // корректировка вероятности p_opp, при условии что оппонент сделал offer и предполагает, что у нас p_own
+	calcP_opp(o) {
 		const {
 			wList,
 			totalWeight,
-		} = this.rankValuesByOffer(o, p_own, !me, !me ? turn - 1 : turn);
+		} = this.rankValuesByOffer(o);
 		let offerProbability = this.game.possibleValues.reduce((mem, values, i) => {
-			return mem + p_opp[i] * wList[i]/totalWeight;
+			return mem + this.p_opp[i] * wList[i]/totalWeight;
 		}, 0);
 
 		return this.game.possibleValues.map((values, i) => {
-			return p_opp[i] * (wList[i]/totalWeight) / offerProbability;
+			return this.p_opp[i] * (wList[i]/totalWeight) / offerProbability;
 		});
 	}
 
-	rankValuesByOffer(o, p_opp, me, turn) {
+	rankValuesByOffer(o) {
 		let totalWeight = 0;
-		let minW = Number.POSITIVE_INFINITY;
 		let wList = this.game.possibleValues.map((values) => {
-			const w = this.calcWeight(o, values, p_opp, me, turn);
-			minW = Math.min(minW, w);
+			const own = getOppositeOffer(o, this.game.counts);
+			const ownValue = getTotalValue(own, values) / this.game.value;
+			let w;
+			if (!ownValue) {
+				w = 0.001;
+			}
+			else if (ownValue < 0.4) {
+				w = ownValue / this.wFeatures[2];
+			}
+			else if (ownValue < 0.6) {
+				w = ownValue;
+			}
+			else if (ownValue < 0.8) {
+				w = 1;
+			}
+			else {
+				w = 1.8 - ownValue;
+			}
+			o.forEach((c, i) => {
+				if (c == 0) {
+					return;
+				}
+				let copyOwn = own.slice();
+				copyOwn[i] = c - 1;
+				const v = getTotalValue(copyOwn, values) / this.game.value;
+				if (v == ownValue) {
+					w = this.wFeatures[0] * w; // 0.5
+				}
+				else if (v + 1 == ownValue) {
+					w = this.wFeatures[1] * w; // 0.8
+				}
+			});
 			return w;
 		});
-
+		
+		
 		wList = wList.map(w => {
-			totalWeight += w + minW;
-			return w + minW;
+			totalWeight += w;
+			return w;
 		});
 
 		return {
@@ -147,93 +177,6 @@ class Player {
 		};
 	}
 
-	rankBestOffers(values1, values2) {
-		return this.game.possibleOffers.map((o, i) => {
-			const ownCounts = getOppositeOffer(o, this.game.counts);
-			const v1 = getTotalValue(ownCounts, values1);
-			const v2 = getTotalValue(o, values2);
-			return Math.min(v1, v2);
-		});
-	}
-
-	calcWeight(o, values, p_opp, me, turn) { // вероятность того, что имея values и зная p_opp, сделаешь о
-
-		const isLastTurn = turn == this.game.duration;
-		const isLastWordByOp = isLastTurn && !me;
-		const isLastWordByMe = isLastTurn && me;
-
-		const own = getOppositeOffer(o, this.game.counts);
-		const ownValue = getTotalValue(own, values);
-
-		let oppValue_e = 0;
-		let max_opp = 0;
-		let min_opp = this.game.value;
-		this.game.possibleValues.forEach((values,i) => {
-			const total = getTotalValue(o, values);
-			max_opp = Math.max(max_opp, total);
-			min_opp = Math.min(min_opp, total);
-			oppValue_e += total * p_opp[i];
-		});
-
-		let variance_opp = 0;
-		this.game.possibleValues.forEach((values,i) => {
-			const total = getTotalValue(o, values);
-			variance_opp += p_opp[i] * (total - oppValue_e) * (total - oppValue_e);
-		});
-		variance_opp = Math.sqrt(variance_opp);
-
-		const k = Math.max((this.game.duration - turn) / this.game.duration, 0);
-
-		 return this.game.possibleValues.reduce((mem,v,i) => {
-		 	return mem += p_opp[i] * Math.min(ownValue + k * ownValue/2, getTotalValue(o, v));
-		 }, 0);
-
-		const features = [
-			me ? 1 : 0,
-			k,
-			ownValue / this.game.value,
-			max_opp / this.game.value,
-			min_opp / this.game.value,
-			oppValue_e / this.game.value,
-			variance_opp / this.game.value,
-		];
-		return features[2] + features[5] - features[1] * features[6];
-		return features.reduce((w, f, i) => w + f * this.wFeatures[i], 0);
-	}
-
-	rankOffersByValues(values, p_opp, me, turn) {
-		let possibleOffers = this.filterPossibleOffers();
-
-		let offersWithWeight = possibleOffers.map((o) => {
-			const w = this.calcWeight(o, values, p_opp, me, turn);
-			return { w, o, };
-		});
-		
-		offersWithWeight.sort((a,b) => b.w - a.w);
-
-		return offersWithWeight.map(o => o.o);
-	}
-
-	// rankValuesByOffer(o, p_opp, me, turn) {
-	// 	let totalWeight = 0;
-	// 	let minW = Number.POSITIVE_INFINITY;
-	// 	let wList = this.game.possibleValues.map((values) => {
-	// 		const w = this.calcWeight(o, values, p_opp, me, turn);
-	// 		minW = Math.min(minW, w);
-	// 		return w;
-	// 	});
-
-	// 	wList = wList.map(w => {
-	// 		totalWeight += w + minW;
-	// 		return w + minW;
-	// 	});
-
-	// 	return {
-	// 		wList,
-	// 		totalWeight,
-	// 	};
-	// }
-	
 	getMetrics(o = []) { // by opposite offer
 		const opposite = getOppositeOffer(o, this.game.counts);
 		const ownValue = getTotalValue(o, this.values);
@@ -270,19 +213,19 @@ class Player {
 		const isLastWordByMe = isLastTurn && this.me;
 		
 		if (o !== undefined) {
-			this.p_opp = this.calcP_opp(o, this.p_opp, this.p_own, this.me, turn);
-
+			this.p_opp = this.calcP_opp(o);
 			const offerAssessment = this.game.possibleValues.reduce((mem, values, i) => {
 				
-				let w = this.acceptOffer(this.values, o, values, isLastWordByMe, isLastWordByOp);
+				let w = this.p_opp[i] > 0.01 ? this.acceptOffer(this.values, o, values, isLastWordByMe || isLastWordByOp, isLastWordByOp) : 0;
 				const oppP = this.findOpp();
-				//isLastWordByMe && console.log(`for ${oppP.values.join()}/${values.join()}: w - ${w.toFixed(2)} p - ${this.p_opp[i].toFixed(2)} me: ${this.values.join()}`);
+				//isLastWordByMe && console.log(`for ${oppP.values.join()}/${values.join()}: p - ${this.p_opp[i].toFixed(2)} w - ${w.toFixed(2)} me: ${this.values.join()} offer: ${o.join()}`);
 				return mem + w * this.p_opp[i];
 			}, 0);
 			
-			if (offerAssessment > 0.5) {
+			if (isLastWordByMe || isLastWordByOp ? offerAssessment > this.wFeatures[3] : offerAssessment > this.wFeatures[4]) {
 				return { o: undefined };
 			}
+
 		}
 		let ownOffer = this.generateOffer(o);
 		if (ownOffer) {
@@ -321,7 +264,7 @@ class Player {
 			return 1;
 		}
 
-		if (ownValue >= 0.8) {
+		if (ownValue >= this.wFeatures[5]) {
 			return 1;
 		}
 
@@ -339,7 +282,7 @@ class Player {
 		if (ownValue >= 0.5) {
 			if (lw) {
 				if (oppValue - ownValue <= 0.4) {
-					return Math.max(0, (8/15 - (oppValue - ownValue)) * (3/2)); // 0.5 - 0.8
+					return Math.max(0, (this.wFeatures[6] - (oppValue - ownValue)));
 				}
 				else {
 					return 0;
@@ -352,7 +295,7 @@ class Player {
 
 		if (lw) {
 			if (oppValue - ownValue <= 0.4) {
-				return Math.max(0, (0.3 - (oppValue - ownValue)) * 3); // 0.3 - 0.6
+				return Math.max(0, (this.wFeatures[7] - (oppValue - ownValue)));
 			}
 			else {
 				return 0;
@@ -394,22 +337,22 @@ class Player {
 		const oppPartAccept = oppOfferLWAssessment != 1 && oppOfferLWAssessment >= 0.5;
 		const oppTotalyReject = oppOfferLWAssessment < 0.5;
 		let w = 0;
-		let k = 0.1;
+		let k = this.wFeatures[8];
 
 		if (ownTotalyAccept && oppTotalyAccept) {
-			w = 1 + ownValue + k * oppValue;
+			w = this.wFeatures[9] + ownValue + k * oppValue;
 		}
 		if (ownTotalyAccept && oppPartAccept) {
-			w = 3 + ownValue + k * oppValue;
+			w = this.wFeatures[10] + ownValue + k * oppValue;
 		}
 		if (ownPartAccept && oppTotalyAccept) {
-			w = 3 + ownValue + k * oppValue;
+			w = this.wFeatures[11] + ownValue + k * oppValue;
 		}
 		if (ownPartAccept && oppPartAccept) {
-			w = 2 + ownValue + k * oppValue;
+			w = this.wFeatures[12] + ownValue + k * oppValue;
 		}
 		if (ownTotalyAccept && oppTotalyReject) {
-			w = 1 + ownValue + k * oppValue;
+			w = this.wFeatures[13] + ownValue + k * oppValue;
 		}
 		if (ownTotalyReject && oppTotalyAccept) {
 			w = 0 + ownValue + k * oppValue;
@@ -442,7 +385,8 @@ class Player {
 
 		let offersWithWeight = possibleOffers.map((c_own2) => {
 			const w = this.game.possibleValues.reduce((mem, values, i) => {
-				return mem + this.getOfferWeight(c_own2, this.values, c_own, values, isLastWordByMe, isLastWordByOp) * this.p_opp[i];
+				const offerW = this.p_opp[i] > 0.01 ? this.getOfferWeight(c_own2, this.values, c_own, values, isLastWordByMe, isLastWordByOp) : 0;
+				return mem + offerW * this.p_opp[i];
 			}, 0);
 			return { w, o: getOppositeOffer(c_own2, this.game.counts), };
 		});
@@ -515,7 +459,7 @@ class Player2 {
 			totalWeight,
 		};
 	}
-	
+
 	getMetrics(o = []) { // by opposite offer
 		const opposite = getOppositeOffer(o, this.game.counts);
 		const ownValue = getTotalValue(o, this.values);
@@ -546,7 +490,7 @@ class Player2 {
 		};
 		return metrics;
 	}
-	
+
 	offer(o, turn) { // 0,1,2,3...duration - 1
 		this.turn = turn;
 		const isLastTurn = turn == this.game.duration;
@@ -659,15 +603,15 @@ class Player2 {
 
 }
 
+const countsList = [
+	[1,2,3],
+	[3,1,1],
+	[1,1,1],
+	[2,2,2],
+	[1,2,2],
+]
 
-const players = [];
-for (let p = 0; p < 3; p++) {
-	const player = [];
-	for (let k = 0; k < 7; k++) {
-		player.push(getRandomInt(-50, 50) / 25);
-	}
-	players.push(player);
-}
+let gamesList = [];
 
 const startGameSeries = (gCount, oCount) => {
 	const resultsByPl = [];
@@ -677,11 +621,8 @@ const startGameSeries = (gCount, oCount) => {
 	for (let g = 0; g < gCount; g++) {
 		let value = 10//getRandomInt(8,12);
 		let turns = 5 //getRandomInt(4,6);
-		let counts = [];
-		for (let c = 0; c < oCount; c++) {
-			counts.push(getRandomInt(1,5));
-		}
-		counts = [1,2,3];
+		let counts = countsList[g];
+		//counts = [1,2,3];
 		let game = new Game(counts,value,turns);
 		if (game.possibleValues.length == 0) {
 			return
@@ -697,10 +638,10 @@ const startGameSeries = (gCount, oCount) => {
 
 				game.setPlayers({
 					values: pValues1, 
-					wFeatures: p1
+					wFeatures: p1.pl
 				}, {
 					values: pValues2, 
-					wFeatures: p2
+					wFeatures: p2.pl
 				}, 1);
 				res = game.startGame();
 				if (res) {
@@ -717,10 +658,10 @@ const startGameSeries = (gCount, oCount) => {
 
 				game.setPlayers({
 					values: pValues2, 
-					wFeatures: p2
+					wFeatures: p2.pl
 				}, {
 					values: pValues1, 
-					wFeatures: p1
+					wFeatures: p1.pl
 				},2);
 				res = game.startGame();
 				if (res) {
@@ -741,9 +682,96 @@ const startGameSeries = (gCount, oCount) => {
 	console.log('----------')
 	players.forEach((p,i) => {
 		const res = resultsByPl[i] || 0;
+		p.res = res;
+	});
+	players.sort((a,b) => b.res - a.res);
+	players.forEach((p,i) => {
 		const deals = dealsByPL[i] || 0;
-		console.log(p, res/games, deals/games, res/deals);
-	})
+		const str = p.pl.reduce((mem, st)=>mem+(mem ? ',' : '')+st.toFixed(3),'')
+		console.log(str);
+		console.log((p.res/games).toFixed(3), (deals/games).toFixed(3), (p.res/deals).toFixed(3));
+	});
 }
 
-startGameSeries(20, 3)
+let players = [{
+	pl: [0.2, 0.2, 1,  0.4, 0.5, 0.6, 0.6, 0.4, 0, 4, 2, 1, 1, 2],
+	res: 0,
+}, {
+	pl: [1,   1,   20, 0.8, 1,   0.9, 1,   0.8, 1, 6, 5, 4, 4, 5],
+	res: 0,
+}];
+
+for (let p = 2; p < 14; p++) {
+	const player = [];
+	player[0] = getRandomInt(20, 100) / 100;
+	player[1] = getRandomInt(20, 100) / 100;
+	player[2] = getRandomInt(10, 200) / 10;
+	player[3] = getRandomInt(40, 80) / 100;
+	player[4] = getRandomInt(50, 100) / 100;
+	player[5] = getRandomInt(60, 90) / 100;
+	player[6] = getRandomInt(60, 100) / 100;
+	player[7] = getRandomInt(40, 80) / 100;
+	player[8] = getRandomInt(0, 100) / 100;
+	player[9] = getRandomInt(40, 60) / 10;
+	player[10] = getRandomInt(20, 50) / 10;
+	player[11] = getRandomInt(10, 40) / 10;
+	player[12] = getRandomInt(10, 40) / 10;
+	player[13] = getRandomInt(20, 50) / 10;
+	players.push({
+		pl: player,
+		res: 0,
+	});
+}
+
+players = [{
+	pl: [1.000,1.000,20.000,0.800,1.000,0.900,1.000,0.800,1.000,6.000,5.000,4.000,4.000,5.000],
+	res: 0,
+}, {
+	pl: [1.190,1.429,11.756,1.720,0.186,0.591,2.803,2.886,2.603,8.025,6.542,3.393,5.702,3.333],
+	res: 0,
+}, {
+	pl: [1.288,2.076, 7.930,0.177,1.456,2.355,2.106,0.066,3.225,5.396,5.696,2.602,2.205,4.958],
+	res: 0,
+}, {
+	pl: [0.605,3.090, 8.098,0.176,1.879,2.793,3.784,0.096,2.977,5.531,5.844,2.652,1.806,5.071],
+	res: 0,
+}, {
+	pl: [1.626,1.207,5.861,0.378,0.610,1.247,2.885,1.349,0.486,5.606,4.111,2.631,3.168,2.950],
+	res: 0,
+}, {
+	pl: [0.885,2.167,8.556,0.138,0.627,1.456,1.807,0.685,2.502,4.638,5.751,1.439,1.808,3.851],
+	res: 0,
+}, {
+	pl: [0.731,1.135,13.012,0.205,3.306,1.538,1.287,0.021,0.602,5.632,4.859,2.272,3.127,3.542],
+	res: 0,
+}, {
+	pl: [-1.933,3.529,9.204,0.475,4.124,0.794,3.503,2.253,1.434,8.084,7.458,5.385,1.088,4.089],
+	res: 0,
+}, {
+	pl: [2.094,2.123,10.236,1.077,0.929,2.121,1.620,2.152,2.487,5.338,4.050,2.864,3.388,3.870],
+	res: 0,
+}, {
+	pl: [1.384,2.135,11.029,0.826,1.054,1.736,2.109,2.393,2.103,5.041,5.160,2.248,3.033,3.643],
+	res: 0,
+}, {
+	pl: [-0.621,0.378,14.382,0.808,0.041,0.529,2.274,3.023,2.942,8.623,5.872,3.322,1.684,4.603],
+	res: 0,
+}, {
+	pl: [0.895,0.332,4.976,0.125,0.223,0.501,1.931,1.742,1.483,3.082,4.486,3.117,1.798,3.889],
+	res: 0,
+}, {
+	pl: [2.683,-0.229,5.064,0.490,1.815,0.495,1.392,1.545,3.529,4.714,4.481,5.911,3.065,4.127],
+	res: 0,
+}];
+
+for (let j = 0; j < 50; j++) {
+	startGameSeries(5, 3);
+	for (let p = 5; p < players.length; p++) {
+		let index1 = getRandomInt(0, 4);
+		let index2 = getRandomInt(0, 4);
+		players[p].pl.forEach((w, i) => {
+			const mid = (players[index1].pl[i] + players[index2].pl[i]) / 2;
+			players[p].pl[i] = getRandomInt(mid - Math.abs(mid - w)/2, mid + Math.abs(mid - w)/2);
+		});
+	}
+}
